@@ -17,20 +17,29 @@ DetectWakeWordState::DetectWakeWordState(I2SSampler *sample_provider)
     // some stats on performance
     m_average_detect_time = 0;
     m_number_of_runs = 0;
+    m_nn = NULL;
+    m_audio_processor = NULL;
 }
 void DetectWakeWordState::enterState()
 {
-    // Create our neural network
-    m_nn = new NeuralNetwork();
-    Serial.println("Created Neral Net");
     // create our audio processor
     m_audio_processor = new AudioProcessor(AUDIO_LENGTH, WINDOW_SIZE, STEP_SIZE, POOLING_SIZE);
     Serial.println("Created audio processor");
+
+    // recreate the neural network only while this state is active
+    // so the tensor arena can be released before HTTPS/TLS is started
+    m_nn = new NeuralNetwork();
+    Serial.println("Created Neural Net");
 
     m_number_of_detections = 0;
 }
 bool DetectWakeWordState::run()
 {
+    if (!m_nn || !m_audio_processor)
+    {
+        return false;
+    }
+
     // time how long this takes for stats
     long start = millis();
     // get access to the samples that have been read in
@@ -62,8 +71,12 @@ bool DetectWakeWordState::run()
         if (m_number_of_detections > 1)
         {
             m_number_of_detections = 0;
+            uint32_t free_ram = esp_get_free_heap_size();
+            Serial.printf("Free ram after DetectWakeWord cleanup %d\n", free_ram);
+
             // detected the wake word in several runs, move to the next state
             Serial.printf("P(%.2f): Here I am, brain the size of a planet...\n", output);
+            
             return true;
         }
     }
@@ -72,11 +85,16 @@ bool DetectWakeWordState::run()
 }
 void DetectWakeWordState::exitState()
 {
-    // Create our neural network
-    delete m_nn;
-    m_nn = NULL;
+    // Release wake-word detection resources to maximize free heap for TLS.
+    uint32_t free_ram = esp_get_free_heap_size();
+    Serial.printf("Free ram before DetectWakeWord cleanup %d\n", free_ram);
+
     delete m_audio_processor;
     m_audio_processor = NULL;
-    uint32_t free_ram = esp_get_free_heap_size();
+
+    delete m_nn;
+    m_nn = NULL;
+
+    free_ram = esp_get_free_heap_size();
     Serial.printf("Free ram after DetectWakeWord cleanup %d\n", free_ram);
 }
